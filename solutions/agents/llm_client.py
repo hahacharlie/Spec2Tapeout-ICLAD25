@@ -1,8 +1,11 @@
 from __future__ import annotations
 import asyncio
+import json
+import os
 import re
-import anthropic
+from pathlib import Path
 
+import anthropic
 
 MODEL_MAP = {
     "opus": "claude-opus-4-20250514",
@@ -12,10 +15,29 @@ MODEL_MAP = {
 _client: anthropic.AsyncAnthropic | None = None
 
 
+def _load_max_plan_token() -> str | None:
+    """Load OAuth access token from Claude Code credentials (Max/Pro plan)."""
+    creds_path = Path.home() / ".claude" / ".credentials.json"
+    if not creds_path.exists():
+        return None
+    try:
+        with open(creds_path) as f:
+            creds = json.load(f)
+        return creds.get("claudeAiOauth", {}).get("accessToken")
+    except (json.JSONDecodeError, KeyError):
+        return None
+
+
 def get_client() -> anthropic.AsyncAnthropic:
     global _client
     if _client is None:
-        _client = anthropic.AsyncAnthropic()
+        # Priority: ANTHROPIC_AUTH_TOKEN env > Max plan credentials > ANTHROPIC_API_KEY env
+        auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN") or _load_max_plan_token()
+        if auth_token:
+            _client = anthropic.AsyncAnthropic(auth_token=auth_token)
+        else:
+            # Falls back to ANTHROPIC_API_KEY env var automatically
+            _client = anthropic.AsyncAnthropic()
     return _client
 
 
