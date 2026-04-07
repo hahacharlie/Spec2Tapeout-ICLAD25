@@ -1,172 +1,150 @@
-# ASU Spec2Tapeout ICLAD 2025 Hackathon Problems
+# Spec-to-Tapeout: LLM Agent for Automated ASIC Design
 
+An LLM-powered multi-agent pipeline that reads YAML hardware specifications and produces tapeout-ready ASIC designs targeting **SkyWater 130nm HD (sky130hd)**.
 
-## Infrastructure setup
+Built for the **ASU ICLAD 2025 Hackathon** (EEE 598 — Spec2Tapeout).
 
-### SLM category: 
-The prerequisites are iVerilog and OpenROAD-flow-scripts that should be available on your laptops. For SLM problems, you will not be evaluated on hidden testcases!
+## Quick Start
 
-### LLM category:
-Solving these problems requires the Docker image already available in your GCP VM instance. You can run the docker image as follows to create an environment that has OpenROAD-flow-scripts and iVerilog already installed:
+```bash
+# 1. Clone
+git clone https://github.com/hahacharlie/Spec2Tapeout-ICLAD25.git
+cd Spec2Tapeout-ICLAD25
+
+# 2. Install dependencies
+pip install openai pyyaml
+
+# 3. Set your API key
+export OPENAI_API_KEY="sk-..."
+
+# 4. Ensure Docker is running (required for OpenROAD-flow-scripts)
+docker pull openroad/flow-ubuntu22.04-builder:836842
+
+# 5. Run
+./run.sh
+```
+
+## Dependencies
+
+| Dependency | Purpose |
+|---|---|
+| Python 3.10+ | Agent runtime |
+| `openai` (pip) | LLM API client |
+| `pyyaml` (pip) | YAML spec parsing |
+| Docker | Runs ORFS (OpenROAD-flow-scripts) for physical synthesis |
+| Icarus Verilog (`iverilog`) | Functional verification of generated RTL |
+
+## How to Run
+
+### Visible problems (default)
+
+```bash
+./run.sh
+```
+
+### Hidden test cases
+
+```bash
+./run.sh --problems problems/hidden/*.yaml --output solutions/hidden/
+```
+
+### Single problem
+
+```bash
+./run.sh --problems problems/visible/p1.yaml --output solutions/visible/
+```
+
+The script is a thin wrapper around the agent entry point:
+```bash
+cd solutions && python spec2tapeout_agent.py --problems <yaml_files> --output <dir>
+```
+
+## Input / Output
+
+### Input
+YAML specification files in `problems/visible/` (or `problems/hidden/`). Each YAML defines:
+- Module name and signature
+- Port definitions (direction, type, width)
+- Design type (FSM, pipelined, combinational)
+- Clock period
+- Technology node (sky130hd)
+
+### Output
+Per problem, the agent produces in `solutions/visible/pN/`:
+- `<module_name>.v` — synthesizable SystemVerilog RTL
+- `6_final.odb` — OpenROAD database (tapeout-ready layout)
+- `6_final.sdc` — timing constraints from the physical flow
+
+## Pipeline Workflow
 
 ```
-docker run -it --rm \
-  -v ~/iclad_hackathon:/workspace/iclad_hackathon \
-  iclad_hackathon:latest bash
+YAML Spec
+   │
+   ├─► Spec Interpreter ──► parse ports, clock, design type
+   │
+   ├─► RTL Generator ──► 3 strategies (textbook, timing_opt, area_opt)
+   │       │                 via LLM (GPT-5.3-codex / GPT-5.4)
+   │       ▼
+   ├─► Verification ──► iverilog compile + testbench simulation
+   │       │               up to 3 fix-and-retry cycles per candidate
+   │       ▼
+   ├─► ORFS (Docker) ──► Yosys → Floorplan → Place → CTS → Route → Final
+   │       │
+   │       ▼
+   ├─► Ranker ──► score against reference (WNS/TNS/Power/Area)
+   │       │
+   │       ▼
+   └─► Optimizer ──► if score < 85, LLM refines best candidate
 ```
 
-Inside the docker container, you will find this repository already cloned and available to you in 
+All 5 problems run in parallel. Each problem generates 3 RTL candidates in parallel, verifies them, runs ORFS, ranks, and optionally optimizes.
+
+## Expected Results
+
+| Problem | Module | Type | Score |
+|---------|--------|------|-------|
+| P1 | `seq_detector_0011` | FSM | ~94/100 |
+| P5 | `dot_product` | Pipelined | ~76/100 |
+| P7 | `exp_fixed_point` | Pipelined | ~82/100 |
+| P8 | `fp16_multiplier` | Combinational | ~63/100 |
+| P9 | `fir_filter` | Pipelined | ~65/100 |
+
+Scores are on a 100-point scale: WNS (40pts), TNS (20pts), Power (20pts), Area (20pts).
+
+## Repository Structure
 
 ```
-/workspace/iclad_hackathon/ICLAD-Hackathon-2025/problem-categories
-```
-
-## Directory Structure
-
-```plaintext
-ASU‑Spec2Tapeout‑ICLAD25‑Hackathon/
-├── README.md
-├── example_problem/
-│   ├── p1.json
-│   ├── intermediate/
-|       └── Intermediate files needed to get to the output 
-│   ├── ouput/
-│       └── Required outputs to be generated. 
-│           - Reference RTL and constraint files
-│           - Example final ODBs
-│
+.
+├── run.sh                          # Single entry point
+├── README.md                       # This file
+├── solutions/
+│   ├── spec2tapeout_agent.py       # Main pipeline orchestrator
+│   ├── agents/
+│   │   ├── llm_client.py           # LLM API abstraction (OpenAI)
+│   │   ├── spec_interpreter.py     # YAML spec parser
+│   │   ├── prompts.py              # System/user prompts for RTL generation
+│   │   ├── rtl_generator.py        # Multi-strategy RTL generation
+│   │   ├── rtl_fixer.py            # LLM-based error correction
+│   │   ├── verification.py         # iverilog compile + simulate
+│   │   ├── sdc_config_generator.py # SDC + ORFS config.mk generation
+│   │   ├── orfs_runner.py          # Docker-based ORFS execution
+│   │   ├── ranker.py               # Score candidates from ORFS metrics
+│   │   └── models.py               # Data models (Spec, Candidate, etc.)
+│   └── visible/p{1,5,7,8,9}/      # Output solutions (RTL + ODB + SDC)
 ├── problems/
-│   └── visible 
-│       └── *.yaml files. Visible input specifications for each challenge problem.
-│           These are the primary inputs your LLM agent will consume to generate RTL and physical design outputs.
-│           Each YAML file typically includes clock, module interface, and expected behavior.
-│
-├── solutions/
-|   ├── your_agent.py
-|       └── This is the script that you use to generated the output solutions. Its the script that interacts with the
-|           language model
-│   ├── visible/
-│       ├── p1/
-│       ├── p5/
-│           └── This is where you submit your full solution for each problem.
-│               Include:
-│               - RTL generated by your LLM agent
-│               - SDC constraints
-│               - Final odb files (e.g., `.def`, `.odb`)
-│  
+│   └── visible/p{1,5,7,8,9}.yaml  # Problem specifications
 ├── evaluation/
-│   ├── evalaute_openroad.py
-|       └──  script that inputs odb file and sdc file and ORFS home directory to generate the metrics needed using report_metrics.tcl. Calls OpenROAD under the hood. 
-|   ├── evalaute_verilog.py
-|       └──  This uses input verilog and testbench to check functionality. Call iVerilog under the hood. 
-│   ├── report_metrics.tcl 
-│   └── visible
-│       └── This directory contains testbenches and reference json files to needed to evaluate your generated solution for |            each problem
-
-
+│   ├── evaluate_verilog.py         # Functional verification script
+│   ├── evaluate_openroad.py        # Physical evaluation script
+│   └── visible/p{1,5,7,8,9}/      # Testbenches + reference metrics
+└── example_outputs/
+    └── run_log.txt                 # Example agent execution log
 ```
 
-## Problem Set
+## Configuration
 
-Your objective is to design tapeout-ready ASICs based on the given problem specifications in the yaml format described below. For each problem, you must develop an LLM agent script/tool that produces the following output files:
+The LLM backend is configured in `solutions/agents/llm_client.py`. To switch models or providers, edit the `MODEL_MAP` and `get_client()` function. The agent supports any OpenAI-compatible API.
 
-## Required Outputs
+## Runtime
 
-- Synthesizable RTL in SystemVerilog  
-- Constraint files in SDC format  
-- Tapeout-ready OpenROAD DB (ODB), i.e., 6_final.odb generated by ORFS
-
-## Guidelines
-
-- Module signatures are provided for each problem. Your generated RTL must **strictly follow** these signatures to ensure compatibility with automated test frameworks.  
-- Your LLM agent script/tool should **generalize to unseen/hidden problems**, which will be provided in a similar format.  
-- Please provide solutions for **all** the questions, even if your script does not generalize to other testcases.  
-
-## Hints
-
-- You have access to **iVerilog**. Use it iteratively with your LLM to verify the functional correctness of your code.  
-- Once your RTL is verified, use **OpenROAD-flow-scripts** to generate the tapeout-ready database and other physical design files and reports.  
-- You can use LLMs to learn how to work with ORFS and use the LLM to write a script to integrate your design into the existing ORFS framework.  
-- The provided constraints or specifications of frequency are relatively relaxed and should be met without requiring multiple iterations of physical design.  
-
----
-
-## Submission guidelines
-
-Solutions to problems must be present in the folder solution folder. The top level must include your agent script to generate solutions for hidden testcases and a README with instructions on how to run the script.  The rest of the solutions should be present in their respective problem folders as described below: 
-```
-├── solutions/
-|   ├── your_agent.py
-|       └── This is the script that you use to generated the output solutions. Its the script that interacts with the
-|           language model
-│   ├── visible/
-│       ├── p1/
-│       ├── p5/
-│           └── This is where you submit your full solution for each problem.
-│               Include:
-│               - RTL generated by your LLM agent
-│               - SDC constraints
-│               - Final odb files (`6_final.odb`)
-```
-
-
-You can also upload this entire repository with your solutions and agent script to a forked version of this repository on your own GH account. You can also leave the solutions in the VM and provide us a path in the VM for evaluation. Once you are done with the problems. Please email us the path to the VM created for you, so we can locate the repository with the solutions. 
-
-## Evaluation setup
-
-For each problem you must run two evaluations scripts
-
-### 1. Functional evaluation of Verilog
-
-This will check the correctness of your generated RTL using the provided testbenches and iVerilog. An example command is provided below
-
-```
-python3 evaluate_verilog.py --verilog ../example_problem/output/iclad_seq_detector.v --problem 1 --tb ../example_problem/intermediate/iclad_seq_detector_tb.v
-```
-
-### 2. Physical evaluation of layout metrics
-
-This will check the metrics of your generated layouts using the specification jsons provided. An example command is provided below
-
-```
-python3 evaluate_openroad.py --odb ../solutions/visible/p1/6_final.odb --sdc ../solutions/visible/p1/6_final.sdc --flow_root ../../OpenROAD-flow-scripts --problem 1
-```
-
-## Example: YAML Spect for Sequence Detector Design for `0011`
-
-```yaml
-seq_detector_0011:
-  description: Detects a binary sequence "0011" in the input stream.
-  tech_node: SkyWater 130HD
-  clock_period: 1.1ns
-  ports:
-    - name: clk
-      direction: input
-      type: logic
-      description: Clock input
-    - name: reset
-      direction: input
-      type: logic
-      description: Synchronous reset (active high)
-    - name: data_in
-      direction: input
-      type: logic
-      description: Serial data input
-    - name: detected
-      direction: output
-      type: logic
-      description: Asserted high for one cycle when '0011' is detected.
-  module_signature: |
-    module seq_detector_0011(
-        input clk,
-        input reset,
-        input data_in,
-        output reg detected
-    );
-  sequence_to_detect: '0011'
-  sample_input: '0001100110110010'
-  sample_output: '0000010001000000'
-
-```
-
-
+A full run (5 problems) takes approximately 30-60 minutes depending on LLM latency and ORFS synthesis time. ORFS runs are the bottleneck (~5-15 min per design).

@@ -6,6 +6,28 @@ import yaml
 from .models import Port, Spec
 
 
+def _sanitize_yaml(content: str) -> str:
+    """Strip stimulus/expected sections that use Python-like syntax invalid in YAML."""
+    # Remove lines in stimulus/expected blocks that contain bare * or + operators
+    # These sections aren't needed for RTL generation
+    lines = content.split("\n")
+    result = []
+    skip_indent = None
+    for line in lines:
+        stripped = line.lstrip()
+        indent = len(line) - len(stripped)
+        if skip_indent is not None:
+            if stripped == "" or indent > skip_indent:
+                continue
+            else:
+                skip_indent = None
+        if re.match(r"^(stimulus|expected_\w+)\s*:", stripped):
+            skip_indent = indent
+            continue
+        result.append(line)
+    return "\n".join(result)
+
+
 def classify_design_type(description: str, ports: dict, parameters: dict) -> str:
     desc_lower = description.lower()
 
@@ -31,7 +53,12 @@ def classify_design_type(description: str, ports: dict, parameters: dict) -> str
 
 def parse_spec(yaml_path: Path) -> Spec:
     with open(yaml_path) as f:
-        raw = yaml.safe_load(f)
+        content = f.read()
+
+    try:
+        raw = yaml.safe_load(content)
+    except yaml.YAMLError:
+        raw = yaml.safe_load(_sanitize_yaml(content))
 
     module_name = list(raw.keys())[0]
     data = raw[module_name]

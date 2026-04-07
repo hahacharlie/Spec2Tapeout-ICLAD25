@@ -1,0 +1,163 @@
+Spec-to-Tapeout Agent
+Problems: ['p1.yaml', 'p5.yaml', 'p7.yaml', 'p8.yaml', 'p9.yaml']
+Output: visible
+
+============================================================
+[P1] Starting pipeline for p1.yaml
+============================================================
+[P1] Parsed: seq_detector_0011 (fsm), clock=1.1ns
+[P1] Generating 3 RTL candidates...
+
+============================================================
+[P5] Starting pipeline for p5.yaml
+============================================================
+[P5] Parsed: dot_product (pipelined), clock=4.5ns
+[P5] Generating 3 RTL candidates...
+
+============================================================
+[P7] Starting pipeline for p7.yaml
+============================================================
+[P7] Parsed: exp_fixed_point (pipelined), clock=4.5ns
+[P7] Generating 3 RTL candidates...
+
+============================================================
+[P8] Starting pipeline for p8.yaml
+============================================================
+[P8] Parsed: fp16_multiplier (combinational), clock=9.0ns
+[P8] Generating 3 RTL candidates...
+
+============================================================
+[P9] Starting pipeline for p9.yaml
+============================================================
+[P9] Parsed: fir_filter (pipelined), clock=8.0ns
+[P9] Generating 3 RTL candidates...
+  [seq_detector_0011] Generating RTL with strategy: textbook
+  [seq_detector_0011] Generating RTL with strategy: timing_opt
+  [seq_detector_0011] Generating RTL with strategy: area_opt
+  [dot_product] Generating RTL with strategy: textbook
+  [dot_product] Generating RTL with strategy: timing_opt
+  [dot_product] Generating RTL with strategy: area_opt
+  [exp_fixed_point] Generating RTL with strategy: textbook
+  [exp_fixed_point] Generating RTL with strategy: timing_opt
+  [exp_fixed_point] Generating RTL with strategy: area_opt
+  [fp16_multiplier] Generating RTL with strategy: textbook
+  [fp16_multiplier] Generating RTL with strategy: timing_opt
+  [fp16_multiplier] Generating RTL with strategy: area_opt
+  [fir_filter] Generating RTL with strategy: textbook
+  [fir_filter] Generating RTL with strategy: timing_opt
+  [fir_filter] Generating RTL with strategy: area_opt
+[P1] Verifying candidates...
+  [seq_detector_0011] Strategy 'textbook' PASSED (attempt 0)
+  [seq_detector_0011] Strategy 'timing_opt' PASSED (attempt 0)
+  [seq_detector_0011] Strategy 'area_opt' PASSED (attempt 0)
+[P1] 3/3 candidates passed verification
+[P1] Running ORFS on 3 candidates...
+  [seq_detector_0011] Running ORFS in Docker...
+  [seq_detector_0011] Running ORFS in Docker...
+  [seq_detector_0011] Running ORFS in Docker...
+[P7] Verifying candidates...
+  [exp_fixed_point] Fixing RTL (simulation, attempt 1)
+  [exp_fixed_point] Fixing RTL (simulation, attempt 1)
+  [exp_fixed_point] Fixing RTL (simulation, attempt 1)
+[P5] Verifying candidates...
+  [dot_product] Fixing RTL (compilation, attempt 1)
+  [dot_product] Strategy 'timing_opt' PASSED (attempt 0)
+  [dot_product] Fixing RTL (simulation, attempt 1)
+[P9] Verifying candidates...
+  [fir_filter] Fixing RTL (simulation, attempt 1)
+  [fir_filter] Fixing RTL (simulation, attempt 1)
+  [fir_filter] Fixing RTL (simulation, attempt 1)
+  [dot_product] Fixing RTL (simulation, attempt 2)
+  [fir_filter] Strategy 'textbook' PASSED (attempt 1)
+  [fir_filter] Fixing RTL (compilation, attempt 2)
+  [fir_filter] Fixing RTL (simulation, attempt 2)
+  [exp_fixed_point] Strategy 'textbook' PASSED (attempt 1)
+  [exp_fixed_point] Fixing RTL (compilation, attempt 2)
+  [exp_fixed_point] Fixing RTL (simulation, attempt 2)
+  [dot_product] Fixing RTL (simulation, attempt 3)
+  [dot_product] Fixing RTL (simulation, attempt 2)
+  [fir_filter] Strategy 'area_opt' PASSED (attempt 2)
+  [fir_filter] Fixing RTL (compilation, attempt 3)
+[P8] Verifying candidates...
+  [fp16_multiplier] Strategy 'textbook' PASSED (attempt 0)
+  [fp16_multiplier] Fixing RTL (simulation, attempt 1)
+  [fp16_multiplier] Fixing RTL (compilation, attempt 1)
+  [dot_product] Strategy 'textbook' FAILED after 3 retries
+  [exp_fixed_point] Fixing RTL (simulation, attempt 3)
+  [fir_filter] Strategy 'timing_opt' PASSED (attempt 3)
+[P9] 3/3 candidates passed verification
+[P9] Running ORFS on 3 candidates...
+  [exp_fixed_point] Strategy 'area_opt' PASSED (attempt 2)
+  [dot_product] Fixing RTL (simulation, attempt 3)
+  [exp_fixed_point] Strategy 'timing_opt' PASSED (attempt 3)
+[P7] 3/3 candidates passed verification
+[P7] Running ORFS on 3 candidates...
+  [fp16_multiplier] Strategy 'area_opt' PASSED (attempt 1)
+  [fp16_multiplier] Strategy 'timing_opt' PASSED (attempt 1)
+[P8] 3/3 candidates passed verification
+[P8] Running ORFS on 3 candidates...
+  [dot_product] Strategy 'area_opt' FAILED after 3 retries
+[P5] 1/3 candidates passed verification
+[P5] Running ORFS on 1 candidates...
+  [seq_detector_0011] ORFS completed successfully
+  [fir_filter] Running ORFS in Docker...
+  [seq_detector_0011] ORFS completed successfully
+  [fir_filter] Running ORFS in Docker...
+  [seq_detector_0011] ORFS completed successfully
+  [fir_filter] Running ORFS in Docker...
+[P1] Best score: 94.12103283058823/100 (strategy: textbook)
+[P1] Solution emitted to /home/charlie-wu/Work/ASU-EEE-598/Spec2Tapeout/ASU-Spec2Tapeout-ICLAD25-Hackathon/solutions/visible/p1
+  [fir_filter] ORFS completed successfully
+  [exp_fixed_point] Running ORFS in Docker...
+  [fir_filter] ORFS completed successfully
+  [exp_fixed_point] Running ORFS in Docker...
+  [fir_filter] ORFS completed successfully
+  [exp_fixed_point] Running ORFS in Docker...
+[P9] Best score: 64.95323847423822/100 (strategy: textbook)
+[P9] Score below 85, attempting optimization...
+  [fir_filter] Fixing RTL (simulation, attempt 1)
+  [fir_filter] Strategy 'optimized' PASSED (attempt 1)
+  [exp_fixed_point] ORFS completed successfully
+  [fp16_multiplier] Running ORFS in Docker...
+  [exp_fixed_point] ORFS completed successfully
+  [fp16_multiplier] Running ORFS in Docker...
+  [exp_fixed_point] ORFS completed successfully
+  [fp16_multiplier] Running ORFS in Docker...
+[P7] Best score: 72.41738691468694/100 (strategy: timing_opt)
+[P7] Score below 85, attempting optimization...
+  [exp_fixed_point] Fixing RTL (simulation, attempt 1)
+  [exp_fixed_point] Strategy 'optimized' PASSED (attempt 1)
+  [fp16_multiplier] ORFS completed successfully
+  [dot_product] Running ORFS in Docker...
+  [fp16_multiplier] ORFS completed successfully
+  [fir_filter] Running ORFS in Docker...
+  [fp16_multiplier] ORFS completed successfully
+  [exp_fixed_point] Running ORFS in Docker...
+[P8] Best score: 61.003712310728304/100 (strategy: timing_opt)
+[P8] Score below 85, attempting optimization...
+  [fp16_multiplier] Strategy 'optimized' PASSED (attempt 0)
+  [dot_product] ORFS completed successfully
+  [fp16_multiplier] Running ORFS in Docker...
+[P5] Best score: 75.93276/100 (strategy: timing_opt)
+[P5] Score below 85, attempting optimization...
+  [dot_product] Strategy 'optimized' PASSED (attempt 0)
+  [exp_fixed_point] ORFS completed successfully
+[P7] Optimization improved score: 72.41738691468694 -> 82.28680297087001
+[P7] Solution emitted to /home/charlie-wu/Work/ASU-EEE-598/Spec2Tapeout/ASU-Spec2Tapeout-ICLAD25-Hackathon/solutions/visible/p7
+  [dot_product] Running ORFS in Docker...
+  [fp16_multiplier] ORFS completed successfully
+[P8] Optimization improved score: 61.003712310728304 -> 62.88576418535844
+[P8] Solution emitted to /home/charlie-wu/Work/ASU-EEE-598/Spec2Tapeout/ASU-Spec2Tapeout-ICLAD25-Hackathon/solutions/visible/p8
+  [dot_product] ORFS completed successfully
+[P5] Solution emitted to /home/charlie-wu/Work/ASU-EEE-598/Spec2Tapeout/ASU-Spec2Tapeout-ICLAD25-Hackathon/solutions/visible/p5
+  [fir_filter] ORFS completed successfully
+[P9] Solution emitted to /home/charlie-wu/Work/ASU-EEE-598/Spec2Tapeout/ASU-Spec2Tapeout-ICLAD25-Hackathon/solutions/visible/p9
+
+============================================================
+SUMMARY
+============================================================
+  P1: 94.12103283058823/100 (success)
+  P5: 75.93276/100 (success)
+  P7: 82.28680297087001/100 (success)
+  P8: 62.88576418535844/100 (success)
+  P9: 64.95323847423822/100 (success)

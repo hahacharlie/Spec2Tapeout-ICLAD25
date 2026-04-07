@@ -1,43 +1,21 @@
 from __future__ import annotations
 import asyncio
-import json
-import os
 import re
-from pathlib import Path
 
-import anthropic
+from openai import AsyncOpenAI
 
 MODEL_MAP = {
-    "opus": "claude-opus-4-20250514",
-    "sonnet": "claude-sonnet-4-20250514",
+    "opus": "gpt-5.3-codex",
+    "sonnet": "gpt-5.4",
 }
 
-_client: anthropic.AsyncAnthropic | None = None
+_client: AsyncOpenAI | None = None
 
 
-def _load_max_plan_token() -> str | None:
-    """Load OAuth access token from Claude Code credentials (Max/Pro plan)."""
-    creds_path = Path.home() / ".claude" / ".credentials.json"
-    if not creds_path.exists():
-        return None
-    try:
-        with open(creds_path) as f:
-            creds = json.load(f)
-        return creds.get("claudeAiOauth", {}).get("accessToken")
-    except (json.JSONDecodeError, KeyError):
-        return None
-
-
-def get_client() -> anthropic.AsyncAnthropic:
+def get_client() -> AsyncOpenAI:
     global _client
     if _client is None:
-        # Priority: ANTHROPIC_AUTH_TOKEN env > Max plan credentials > ANTHROPIC_API_KEY env
-        auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN") or _load_max_plan_token()
-        if auth_token:
-            _client = anthropic.AsyncAnthropic(auth_token=auth_token)
-        else:
-            # Falls back to ANTHROPIC_API_KEY env var automatically
-            _client = anthropic.AsyncAnthropic()
+        _client = AsyncOpenAI()
     return _client
 
 
@@ -48,27 +26,29 @@ async def llm_call(
     max_tokens: int = 8192,
     max_retries: int = 3,
 ) -> str:
+    """Call OpenAI API via Responses API."""
     client = get_client()
-    model_id = MODEL_MAP[model]
+    model_id = MODEL_MAP.get(model, model)
 
     for attempt in range(max_retries):
         try:
-            response = await client.messages.create(
+            response = await client.responses.create(
                 model=model_id,
-                max_tokens=max_tokens,
-                system=system,
-                messages=[{"role": "user", "content": prompt}],
+                instructions=system,
+                input=prompt,
             )
-            return response.content[0].text
-        except anthropic.RateLimitError:
-            wait = 2 ** (attempt + 1)
-            print(f"  Rate limited, waiting {wait}s...")
-            await asyncio.sleep(wait)
-        except anthropic.APIError as e:
-            if attempt == max_retries - 1:
+            return response.output_text
+        except Exception as e:
+            error_str = str(e)
+            if "rate" in error_str.lower() or "429" in error_str:
+                wait = 2 ** (attempt + 1)
+                print(f"  Rate limited, waiting {wait}s...")
+                await asyncio.sleep(wait)
+            elif attempt == max_retries - 1:
                 raise
-            print(f"  API error (attempt {attempt + 1}): {e}")
-            await asyncio.sleep(2)
+            else:
+                print(f"  API error (attempt {attempt + 1}): {error_str[:200]}")
+                await asyncio.sleep(2)
 
     raise RuntimeError("LLM call failed after max retries")
 

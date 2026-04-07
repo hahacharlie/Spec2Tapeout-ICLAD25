@@ -1,7 +1,6 @@
 from __future__ import annotations
 import asyncio
-import json
-import subprocess
+import shutil
 from pathlib import Path
 
 from .models import Spec, ScoredCandidate
@@ -32,6 +31,24 @@ async def _run_orfs_inner(
     work_dir: Path,
 ) -> ScoredCandidate | None:
     print(f"  [{spec.module_name}] Running ORFS in Docker...")
+    # Clean stale results to prevent ORFS incremental build from reusing old artifacts.
+    # Files are owned by root (created by Docker), so use Docker to clean them.
+    if work_dir.exists():
+        for subdir in ("results", "logs"):
+            stale = work_dir / subdir
+            if stale.exists():
+                try:
+                    shutil.rmtree(stale)
+                except PermissionError:
+                    import subprocess
+                    subprocess.run(
+                        ["docker", "run", "--rm",
+                         "-v", f"{stale.resolve()}:/cleanup",
+                         "alpine", "rm", "-rf", "/cleanup"],
+                        capture_output=True, timeout=30,
+                    )
+                    if stale.exists():
+                        shutil.rmtree(stale, ignore_errors=True)
     work_dir.mkdir(parents=True, exist_ok=True)
 
     v_path = work_dir / f"{spec.module_name}.v"

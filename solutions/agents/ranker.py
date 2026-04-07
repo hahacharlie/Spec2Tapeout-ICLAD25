@@ -1,13 +1,10 @@
 from __future__ import annotations
 import json
-import subprocess
-import tempfile
 from pathlib import Path
 
 from .models import Spec, ScoredCandidate
 from .llm_client import llm_call, extract_code_block
 from .prompts import build_optimizer_prompt
-from .orfs_runner import DOCKER_IMAGE
 
 SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent / "evaluation"
 
@@ -59,57 +56,53 @@ def _evaluate(submission: dict, reference: dict) -> float:
     return min(score, 100)
 
 
-def _extract_metrics_via_docker(odb_path: Path, sdc_path: Path) -> dict | None:
-    """Run OpenROAD inside Docker to extract metrics from ODB."""
-    eval_tcl = SCRIPT_DIR / "report_metrics.tcl"
-    if not eval_tcl.exists():
-        print(f"  report_metrics.tcl not found at {eval_tcl}")
+def _find_orfs_report(odb_path: Path) -> Path | None:
+    """Find 6_report.json from the ORFS workspace given the odb path.
+
+    ORFS layout:
+      workspace/pN/orfs_strategy/results/sky130hd/<design>/base/6_final.odb
+      workspace/pN/orfs_strategy/logs/sky130hd/<design>/base/6_report.json
+    """
+    odb_str = str(odb_path)
+
+    # Primary: swap results/ -> logs/ and 6_final.odb -> 6_report.json
+    if "/results/" in odb_str:
+        report = Path(
+            odb_str.replace("/results/", "/logs/")
+                   .replace("6_final.odb", "6_report.json")
+        )
+        if report.exists():
+            return report
+
+    # Fallback: search sibling logs directory
+    for parent in odb_path.parents:
+        if parent.name in ("results", "base"):
+            logs_root = parent.parent / "logs" if parent.name == "results" else None
+            if logs_root is None:
+                for p2 in parent.parents:
+                    if p2.name == "results":
+                        logs_root = Path(str(p2).replace("/results", "/logs"))
+                        break
+            if logs_root and logs_root.exists():
+                for p in logs_root.rglob("6_report.json"):
+                    return p
+            break
+    return None
+
+
+def _load_orfs_metrics(report_path: Path) -> dict | None:
+    """Load metrics from ORFS 6_report.json, stripping the finish__ prefix."""
+    try:
+        with open(report_path) as f:
+            raw = json.load(f)
+        # Strip the 'finish__' prefix ORFS adds to metric keys
+        return {
+            k.replace("finish__", "", 1): v
+            for k, v in raw.items()
+        }
+    except Exception as e:
+        print(f"  Failed to load metrics from {report_path}: {e}")
         return None
-
-    # Create a temp dir for scoring artifacts
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp)
-        metrics_file = tmp_path / "metrics.json"
-
-        # Write the wrapper TCL that sets variables and sources the eval script
-        wrapper_tcl = tmp_path / "run_metrics.tcl"
-        wrapper_tcl.write_text(f"""
-set odb_path "/scoring/design.odb"
-set sdc_path "/scoring/design.sdc"
-set flow_root "/OpenROAD-flow-scripts"
-source "/scoring/report_metrics.tcl"
-""")
-
-        cmd = [
-            "docker", "run", "--rm",
-            "-v", f"{odb_path.resolve()}:/scoring/design.odb:ro",
-            "-v", f"{sdc_path.resolve()}:/scoring/design.sdc:ro",
-            "-v", f"{eval_tcl.resolve()}:/scoring/report_metrics.tcl:ro",
-            "-v", f"{wrapper_tcl.resolve()}:/scoring/run_metrics.tcl:ro",
-            "-v", f"{tmp_path.resolve()}:/scoring/output",
-            DOCKER_IMAGE,
-            "bash", "-c",
-            "/OpenROAD-flow-scripts/tools/install/OpenROAD/bin/openroad"
-            " -metrics /scoring/output/metrics.json -exit /scoring/run_metrics.tcl",
-        ]
-
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-            if not metrics_file.exists():
-                print(f"  Docker scoring produced no metrics.json (exit {result.returncode})")
-                if result.stderr:
-                    print(f"  stderr: {result.stderr[-300:]}")
-                return None
-
-            with open(metrics_file) as f:
-                return json.load(f)
-
-        except subprocess.TimeoutExpired:
-            print("  Docker scoring timed out")
-            return None
-        except Exception as e:
-            print(f"  Docker scoring failed: {e}")
-            return None
 
 
 def score_candidate(
@@ -117,12 +110,24 @@ def score_candidate(
     problem_number: int,
     flow_root: Path,
 ) -> float:
-    if candidate.odb_path is None or candidate.sdc_path is None:
+    if candidate.odb_path is None:
         return 0.0
 
-    # Extract metrics by running OpenROAD inside Docker
-    submission = _extract_metrics_via_docker(candidate.odb_path, candidate.sdc_path)
+    # Read metrics directly from ORFS output (no extra Docker needed)
+    report_path = _find_orfs_report(candidate.odb_path)
+    if report_path is None:
+        print(f"  No 6_report.json found for {candidate.odb_path}")
+        return 0.0
+
+    submission = _load_orfs_metrics(report_path)
     if submission is None:
+        return 0.0
+
+    # Check required keys exist
+    required = ["timing__setup__ws", "timing__setup__tns", "power__total", "design__instance__area"]
+    if not all(k in submission for k in required):
+        missing = [k for k in required if k not in submission]
+        print(f"  Metrics missing required keys: {missing}")
         return 0.0
 
     try:
