@@ -2,41 +2,78 @@
 
 An LLM-powered multi-agent pipeline that reads YAML hardware specifications and produces tapeout-ready ASIC designs targeting **SkyWater 130nm HD (sky130hd)**.
 
-Built for the **ASU ICLAD 2025 Hackathon** (EEE 598 — Spec2Tapeout).
+Built for the **ASU ICLAD 2025 Hackathon** (EEE 598 — Project 2).
+
+## Prerequisites
+
+
+| Dependency | Purpose |
+|---|---|
+| **Python 3.10** | Agent runtime |
+| **Docker** | Required by ORFS for physical synthesis |
+| **Icarus Verilog** (`iverilog`) | Functional verification of generated RTL |
+| **[OpenROAD-flow-scripts](https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts)** | Physical synthesis flow -- cloned as sibling directory `../OpenROAD-flow-scripts/` and built via its Docker setup (see [BuildWithDocker.md](https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts/blob/master/docs/user/BuildWithDocker.md)) |
+
+
+### Install system dependencies
+
+**Ubuntu/Debian:**
+
+```bash
+sudo apt update
+sudo apt install -y python3.10 python3.10-venv iverilog docker.io
+```
+
+**Arch Linux:**
+
+```bash
+sudo pacman -S python iverilog docker
+```
+
+**macOS (Homebrew):**
+
+```bash
+brew install python@3.10 icarus-verilog docker
+```
+
+Make sure Docker is running:
+
+```bash
+sudo systemctl start docker
+```
 
 ## Quick Start
 
 ```bash
-# 1. Clone
+# 1. Clone this repo and OpenROAD-flow-scripts side by side
 git clone https://github.com/hahacharlie/Spec2Tapeout-ICLAD25.git
+git clone --recursive https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts.git
 cd Spec2Tapeout-ICLAD25
 
-# 2. Install dependencies
-pip install openai pyyaml
+# 2. Create and activate a Python 3.10 virtual environment
+python3.10 -m venv .venv
+source .venv/bin/activate
 
-# 3. Set your API key
+# 3. Install Python dependencies
+pip install -r requirements.txt
+
+# 4. Set your API key
 export OPENAI_API_KEY="sk-..."
 
-# 4. Ensure Docker is running (required for OpenROAD-flow-scripts)
-docker pull openroad/flow-ubuntu22.04-builder:836842
+# 5. Set up ORFS Docker (follow OpenROAD-flow-scripts instructions)
+#    See: ../OpenROAD-flow-scripts/docs/user/BuildWithDocker.md
+cd ../OpenROAD-flow-scripts
+sudo ./setup.sh
+./build_openroad.sh
+cd ../Spec2Tapeout-ICLAD25
 
-# 5. Run
+# 6. Run
 ./run.sh
 ```
 
-## Dependencies
-
-| Dependency | Purpose |
-|---|---|
-| Python 3.10+ | Agent runtime |
-| `openai` (pip) | LLM API client |
-| `pyyaml` (pip) | YAML spec parsing |
-| Docker | Runs ORFS (OpenROAD-flow-scripts) for physical synthesis |
-| Icarus Verilog (`iverilog`) | Functional verification of generated RTL |
-
 ## How to Run
 
-### Visible problems (default)
+### All visible problems (default)
 
 ```bash
 ./run.sh
@@ -55,6 +92,7 @@ docker pull openroad/flow-ubuntu22.04-builder:836842
 ```
 
 The script is a thin wrapper around the agent entry point:
+
 ```bash
 cd solutions && python spec2tapeout_agent.py --problems <yaml_files> --output <dir>
 ```
@@ -62,7 +100,9 @@ cd solutions && python spec2tapeout_agent.py --problems <yaml_files> --output <d
 ## Input / Output
 
 ### Input
+
 YAML specification files in `problems/visible/` (or `problems/hidden/`). Each YAML defines:
+
 - Module name and signature
 - Port definitions (direction, type, width)
 - Design type (FSM, pipelined, combinational)
@@ -70,36 +110,39 @@ YAML specification files in `problems/visible/` (or `problems/hidden/`). Each YA
 - Technology node (sky130hd)
 
 ### Output
+
 Per problem, the agent produces in `solutions/visible/pN/`:
-- `<module_name>.v` — synthesizable SystemVerilog RTL
-- `6_final.odb` — OpenROAD database (tapeout-ready layout)
-- `6_final.sdc` — timing constraints from the physical flow
+
+- `<module_name>.v` -- synthesizable SystemVerilog RTL
+- `6_final.odb` -- OpenROAD database (tapeout-ready layout)
+- `6_final.sdc` -- timing constraints from the physical flow
 
 ## Pipeline Workflow
 
 ```
 YAML Spec
-   │
-   ├─► Spec Interpreter ──► parse ports, clock, design type
-   │
-   ├─► RTL Generator ──► 3 strategies (textbook, timing_opt, area_opt)
-   │       │                 via LLM (GPT-5.3-codex / GPT-5.4)
-   │       ▼
-   ├─► Verification ──► iverilog compile + testbench simulation
-   │       │               up to 3 fix-and-retry cycles per candidate
-   │       ▼
-   ├─► ORFS (Docker) ──► Yosys → Floorplan → Place → CTS → Route → Final
-   │       │
-   │       ▼
-   ├─► Ranker ──► score against reference (WNS/TNS/Power/Area)
-   │       │
-   │       ▼
-   └─► Optimizer ──► if score < 85, LLM refines best candidate
+   |
+   +-> Spec Interpreter --> parse ports, clock, design type
+   |
+   +-> RTL Generator --> 3 strategies (textbook, timing_opt, area_opt)
+   |       |                via LLM (GPT-5.3-codex / GPT-5.4)
+   |       v
+   +-> Verification --> iverilog compile + testbench simulation
+   |       |              up to 3 fix-and-retry cycles per candidate
+   |       v
+   +-> ORFS (Docker) --> Yosys -> Floorplan -> Place -> CTS -> Route -> Final
+   |       |
+   |       v
+   +-> Ranker --> score against reference (WNS/TNS/Power/Area)
+   |       |
+   |       v
+   +-> Optimizer --> if score < 85, LLM refines best candidate
 ```
 
 All 5 problems run in parallel. Each problem generates 3 RTL candidates in parallel, verifies them, runs ORFS, ranks, and optionally optimizes.
 
 ## Expected Results
+
 
 | Problem | Module | Type | Score |
 |---------|--------|------|-------|
@@ -109,13 +152,40 @@ All 5 problems run in parallel. Each problem generates 3 RTL candidates in paral
 | P8 | `fp16_multiplier` | Combinational | ~63/100 |
 | P9 | `fir_filter` | Pipelined | ~65/100 |
 
+
 Scores are on a 100-point scale: WNS (40pts), TNS (20pts), Power (20pts), Area (20pts).
+
+## Evaluation
+
+### Functional verification (iVerilog)
+
+```bash
+source .venv/bin/activate
+cd evaluation
+python evaluate_verilog.py \
+  --verilog ../solutions/visible/p1/seq_detector_0011.v \
+  --problem 1 \
+  --tb visible/p1/iclad_seq_detector_tb.v
+```
+
+### Physical evaluation (OpenROAD)
+
+```bash
+source .venv/bin/activate
+cd evaluation
+python evaluate_openroad.py \
+  --odb ../solutions/visible/p1/6_final.odb \
+  --sdc ../solutions/visible/p1/6_final.sdc \
+  --flow_root ../../OpenROAD-flow-scripts \
+  --problem 1
+```
 
 ## Repository Structure
 
 ```
 .
 ├── run.sh                          # Single entry point
+├── requirements.txt                # Python dependencies
 ├── README.md                       # This file
 ├── solutions/
 │   ├── spec2tapeout_agent.py       # Main pipeline orchestrator

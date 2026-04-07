@@ -1,0 +1,278 @@
+\documentclass[10pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{setspace}
+\singlespacing
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{tabularx}
+
+\lstset{
+  basicstyle=\ttfamily\scriptsize,
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{gray!10},
+}
+
+\setlength{\parskip}{4pt}
+\setlength{\parindent}{0pt}
+
+\title{\textbf{Spec-to-Tapeout: An LLM Multi-Agent Pipeline\\for Automated ASIC Design}}
+\author{Qihang Wu (1238990457)\\ EEE 598 Project 2 --- ASU ICLAD 2025 Hackathon Track}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Methodology \& Problem Definition}
+
+The ICLAD Spec-to-Tapeout challenge requires building an automated pipeline that reads 
+a YAML hardware specification and produces a tapeout-ready ASIC design targeting 
+the SkyWater 130nm HD (sky130hd) process node.
+
+\textbf{Inputs:} YAML files specifying a module name, 
+port definitions (direction, type, width), 
+design type (FSM, pipelined, or combinational), 
+clock period, and optional parameters.
+
+\textbf{Outputs:} Per problem: 
+(1) synthesizable SystemVerilog RTL that passes functional verification via Icarus Verilog, 
+and (2) a final OpenROAD database (\texttt{6\_final.odb}) produced by running OpenROAD-flow-scripts (ORFS) 
+through synthesis, placement, clock-tree synthesis, routing, and finishing.
+
+\textbf{Objective:} Maximize a 100-point score computed from four physical metrics 
+compared against a reference design: worst negative slack (WNS, 40\,pts), 
+total negative slack (TNS, 20\,pts), total power (20\,pts), and instance area (20\,pts).
+
+\textbf{Approach:} Rather than a single monolithic LLM prompt, 
+the system uses a multi-agent pipeline with specialized stages---specification parsing, multi-strategy RTL generation, 
+iterative verification and repair, physical synthesis, metric-based ranking, 
+and targeted optimization. This decomposition lets each stage use focused prompts 
+with domain-specific constraints, dramatically improving success rates over one-shot generation.
+
+\section{Agent Architecture}
+
+The pipeline consists of seven cooperating agents orchestrated by an async Python script:
+
+\begin{enumerate}[leftmargin=*,topsep=2pt,itemsep=1pt]
+  \item \textbf{Spec Interpreter} --- Parses YAML into a structured \texttt{Spec} object. 
+    Handles edge cases such as Python-like syntax in YAML fields (e.g., \texttt{[0,1]*40} alias conflicts) 
+    by stripping non-essential sections.
+  \item \textbf{RTL Generator} --- Produces three independent RTL candidates per problem using distinct strategies: 
+    \emph{textbook} (clean, correct), \emph{timing\_opt} (minimize critical path), and \emph{area\_opt} (minimize gate count). 
+    Each strategy injects different design guidance into the LLM prompt.
+  \item \textbf{Verifier} --- Compiles each candidate with \texttt{iverilog -Wall -g2012} against the problem testbench 
+    and runs simulation with \texttt{vvp}. Checks for PASSED/FAILED in the output.
+  \item \textbf{RTL Fixer} --- When verification fails, sends the error log, original spec, testbench source, 
+    and current RTL back to the LLM for targeted repair. 
+  \item \textbf{ORFS Runner} --- Executes the full OpenROAD flow inside a Docker container. Generates \texttt{config.mk} 
+    and \texttt{constraint.sdc} from the spec, mounts the workspace, and runs \texttt{make finish}. 
+    Includes automatic retry with relaxed utilization on failure.
+  \item \textbf{Ranker} --- Reads final report produced by ORFS and scores each candidate against reference metrics 
+    using the official scoring formula.
+  \item \textbf{Optimizer} --- If the best score falls below 85/100, the LLM receives the current RTL along with 
+    specific metrics feedback and attempts a targeted optimization pass.
+\end{enumerate}
+
+\textbf{Difference from simple prompting:} A one-shot prompt produces a single candidate with no feedback. 
+This system generates multiple diverse candidates, verifies each against ground-truth testbenches, 
+iteratively repairs failures, evaluates physical metrics after real EDA synthesis, and closes the loop with optimization. 
+The multi-strategy approach ensures coverage---for example, problem 1 (FSM) scores highest with \emph{textbook} while 
+problem 7 (Taylor series) benefits from \emph{optimized}.
+
+\section{Tools \& Frameworks}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\textwidth}{lX}
+\toprule
+\textbf{Tool} & \textbf{Role} \\
+\midrule
+OpenAI API (GPT-5.3-codex, GPT-5.4) & RTL generation, error repair, optimization \\
+Icarus Verilog (\texttt{iverilog}/\texttt{vvp}) & Functional verification (compile + simulate) \\
+OpenROAD-flow-scripts (ORFS) via Docker & Full physical synthesis \\
+Yosys (inside ORFS) & Logic synthesis (RTL $\to$ gate-level netlist) \\
+Python 3 + asyncio & Pipeline orchestration, async parallel execution \\
+PyYAML & YAML specification parsing \\
+Docker & Containerized EDA environment \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Context Engineering}
+
+Each LLM call is constructed with carefully scoped context:
+
+\textbf{System prompt} includes: (1) base rules (synthesizable-only constructs, exact module signature matching), 
+(2) Yosys compatibility constraints (no blocking assigns in \texttt{always\_ff}, 
+default assignments in \texttt{always\_comb} to prevent latch inference, no nested always blocks), 
+(3) strategy-specific guidance, and (4) design-type hints 
+(e.g., for pipelined designs: unsigned arithmetic for packed array indexing, tree-structured accumulation).
+
+\textbf{User prompt} includes: module name, description, clock period, port definitions, 
+the exact module signature, and sample I/O when available.
+
+\textbf{Fixer context} includes: the error log, original spec, testbench source (read-only), and current RTL source.
+
+\textbf{Optimizer context} includes: current score, specific metrics (WNS, TNS, power, area), 
+computed focus areas (e.g., ``TIMING CRITICAL''), and current RTL.
+
+Context is managed by limiting each prompt to the minimum information needed for its task. 
+Testbench source is included only in fixer prompts. ORFS metrics are only passed during optimization.
+
+\section{Interaction with EDA Tools}
+
+\textbf{Icarus Verilog:} The agent writes the candidate RTL to a temporary file, compiles it against the testbench with \texttt{iverilog -Wall -g2012 -o sim.vvp design.v testbench.v}, and runs \texttt{vvp sim.vvp}. The simulation output is searched for ``PASS'' or ``FAIL'' strings.
+
+\textbf{ORFS (Docker):} The agent generates two EDA configuration files from the YAML spec:
+
+\begin{itemize}[topsep=2pt,itemsep=0pt]
+  \item \texttt{config.mk} --- sets \texttt{DESIGN\_NAME}, \texttt{PLATFORM=sky130hd}, \texttt{VERILOG\_FILES}, 
+    \texttt{SDC\_FILE}, utilization, and density parameters.
+  \item \texttt{constraint.sdc} --- \texttt{create\_clock} with the spec's period, input/output delays at 20\% of clock period.
+\end{itemize}
+
+These are mounted into the Docker container along with the RTL, and the flow runs. 
+% Results and logs are mounted back to the host.
+
+\textbf{Metric extraction:} After ORFS completes, the ranker reads \texttt{JSON} report file from the logs directory, strips 
+the \texttt{finish\_\_} prefix from keys, and extracts \texttt{timing\_\_setup\_\_ws}, \texttt{timing\_\_setup\_\_tns}, 
+\texttt{power\_\_total}, and \texttt{design\_\_instance\_\_area}. This approach avoids running a separate scoring container --
+it reads the metrics ORFS already computed.
+
+\textbf{Iterative feedback:} The pipeline operates as a closed loop. If verification fails, the error is fed back to the LLM 
+for repair (up to 3 attempts). If no candidate passes, an emergency regeneration step includes all prior error logs to avoid 
+repeating mistakes. If the physical score is below threshold, the optimizer receives specific metric feedback.
+
+\section{Prototype Implementation}
+
+\textbf{Fully functional:}
+
+\begin{itemize}[topsep=2pt,itemsep=0pt]
+  \item End-to-end pipeline: YAML $\to$ RTL $\to$ verification $\to$ ORFS $\to$ scoring $\to$ optimization
+  \item Multi-strategy generation (3 candidates per problem)
+  \item Iterative verification with LLM-based repair (3 retries)
+  \item Parallel execution of all 5 problems
+  \item Automatic Yosys error avoidance via prompt engineering
+  \item Workspace cleanup between runs (Docker-based, handles root-owned files)
+  \item Generalization to hidden problems (same YAML schema)
+\end{itemize}
+
+\textbf{Limitations:}
+
+\begin{itemize}[topsep=2pt,itemsep=0pt]
+  \item No Yosys pre-synthesis check before running the full ORFS flow---Yosys failures waste an entire ORFS run (~10 min).
+  \item Optimization is limited to a single pass; iterative PPA refinement would improve scores.
+  \item The agent cannot directly debug timing violations at the gate level---it relies on the LLM to infer structural changes 
+    from high-level metric feedback.
+\end{itemize}
+
+\section{Initial Results}
+
+All five visible problems produce solutions. Scoring is on a 100-point scale.
+
+\begin{table}[ht]
+\centering
+\small
+\begin{tabular}{llrrrrrr}
+\toprule
+\textbf{Prob.} & \textbf{Module} & \textbf{Score} & \textbf{WNS (ns)} & 
+\textbf{TNS (ns)} & \textbf{Power (W)} & \textbf{Area} \\
+\midrule
+P1 & seq\_detector\_0011  & \textbf{94.1} & 0.155  &  0.0  & 0.00037 & 213 \\
+P5 & dot\_product         & 75.9          & 0.128  &  0.0  & 0.01625 & 35394 \\
+P7 & exp\_fixed\_point    & 82.3          & 0.072  &  0.0  & 0.00163 & 9189 \\
+P8 & fp16\_multiplier     & 62.9          & $-$2.012 & $-$27.7 & 0.00437 & 7983 \\
+P9 & fir\_filter          & 65.0          & $-$1.888 & $-$43.2 & 0.15582 & 104787 \\
+\midrule
+\multicolumn{2}{l}{\textbf{Average}} & \textbf{76.0} & & & & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[ht]
+\centering
+\small
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Prob.} & \textbf{Ref WNS} & \textbf{Ref TNS} & \textbf{Ref Power} & \textbf{Ref Area} \\
+\midrule
+P1 & 0.001 & 0.0 & 0.00060 & 244 \\
+P5 & 0.230 & 0.0 & 0.03363 & 25107 \\
+P7 & 0.105 & 0.0 & 0.00933 & 8539 \\
+P8 & 0.260 & 0.0 & 0.00364 & 6484 \\
+P9 & $-$0.166 & $-$0.7 & 0.10310 & 104542 \\
+\bottomrule
+\end{tabular}
+\caption{Reference design metrics for comparison.}
+\end{table}
+
+P1 and P7 meet timing (WNS $>$ 0) with strong scores. P5 meets timing and achieves reasonable PPA. 
+P8 and P9 have timing violations; P8's combinational FP16 multiplier has a critical path exceeding 
+the 9\,ns clock, and P9's FIR filter accumulation is too deep for the 8\,ns clock.
+
+\section{AI Usage \& Insights}
+
+\textbf{Role of AI:} The LLM (GPT-5.3-codex) is the core generative component. 
+It performs: (1) RTL code generation from natural-language specs, 
+(2) targeted error repair from compiler/simulator logs, and 
+(3) PPA-guided optimization from physical metrics.
+
+\textbf{Where AI excels:}
+\begin{itemize}[topsep=2pt,itemsep=0pt]
+  \item \emph{FSM design} (P1): The LLM produces near-optimal state machines consistently, 
+    scoring 94/100 with minimal fix iterations.
+  \item \emph{Error repair}: When given a compilation error or simulation mismatch along with the testbench, 
+    the LLM typically fixes the issue within 1--2 attempts.
+  \item \emph{Generalization}: The same prompts and pipeline handle FSMs, pipelined datapaths, 
+    and combinational logic without problem-specific tuning.
+\end{itemize}
+
+\textbf{Where AI struggles:}
+\begin{itemize}[topsep=2pt,itemsep=0pt]
+  \item \emph{Timing-aware design}: The LLM has no model of gate delays at 130\,nm. 
+    It cannot predict whether a combinational path will meet a clock constraint. 
+    problem 8 (FP16 multiply) consistently violates timing because the LLM doesn't know that an 
+    11$\times$11 multiply + normalize + round exceeds 9\,ns in sky130hd.
+  \item \emph{Yosys compatibility}: iverilog and Yosys accept different SystemVerilog subsets. 
+    Code that passes iverilog may fail Yosys synthesis (e.g., blocking assignments in \texttt{always\_ff}, 
+    latch inference from incomplete \texttt{always\_comb}). This required explicit Yosys rules in the system prompt.
+  \item \emph{Signed/unsigned semantics}: iverilog's treatment of packed array indexing (drops signedness) 
+    caused persistent failures in P5 (dot product) until the prompt explicitly warned against \texttt{\$signed()} casts.
+\end{itemize}
+
+\section{Challenges, Limitations, \& Improvements}
+
+\textbf{Key challenges encountered:}
+\begin{itemize}[topsep=2pt,itemsep=0pt]
+  \item \emph{Scoring reliability}: The initial scoring approach ran a separate Docker container 
+    to extract metrics via OpenROAD, but this produced different results than the ORFS flow itself. 
+    Switching to read \texttt{JSON} report file directly resolved inconsistencies.
+  \item \emph{ORFS stale artifacts}: Docker creates files as root. When re-running the pipeline, 
+    ORFS's incremental build reused old synthesis results even with new RTL. 
+    Fixed by cleaning results/logs directories before each run using a Docker-based cleanup.
+\end{itemize}
+
+\textbf{Limitations:}
+\begin{itemize}[topsep=2pt,itemsep=0pt]
+  \item Stochastic output: LLM-generated RTL varies between runs. 
+    The same pipeline can score 86 or 70 for problem 7 
+    depending on the quality of the generated code.
+  \item No gate-level feedback: The agent cannot inspect the synthesized netlist 
+    to identify specific critical paths for targeted restructuring.
+  \item Single optimization pass: More iterative refinement (multiple rounds of ORFS + feedback) would improve scores.
+\end{itemize}
+
+\textbf{Planned improvements for Phase 3:}
+\begin{itemize}[topsep=2pt,itemsep=0pt]
+  \item Add a Yosys pre-synthesis check before running the full ORFS flow to catch synthesis errors in seconds instead of minutes.
+  \item Implement multi-round optimization with gate-level timing path extraction to give the LLM specific critical-path information.
+  \item Increase candidate count from 3 to 5+ for more diverse coverage.
+  \item Add design-specific templates (e.g., a known-good FP16 multiplier skeleton) as few-shot examples in the prompt.
+\end{itemize}
+
+\end{document}
