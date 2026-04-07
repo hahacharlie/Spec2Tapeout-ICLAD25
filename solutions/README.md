@@ -1,5 +1,10 @@
-Solutions to problems must be present in the folder solution folder. The top level must include your agent script to generate solutions for hidden testcases and a README with instructions on how to run the script.  The rest of the solutions should be present in their respective problem folders as described below: 
-```
+Solutions to problems must be present in the folder solution folder.
+
+The top level must include your agent script to generate solutions for hidden testcases and a README with instructions on how to run the script.
+
+The rest of the solutions should be present in their respective problem folders as described below:
+
+```txt
 ├── solutions/
 |   ├── your_agent.py
 |       └── This is the script that you use to generated the output solutions. Its the script that interacts with the
@@ -13,4 +18,3 @@ Solutions to problems must be present in the folder solution folder. The top lev
 │               - SDC constraints
 │               - Final odb files (`6_final.odb`)
 ```
-
