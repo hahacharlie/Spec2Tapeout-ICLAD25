@@ -12,7 +12,8 @@ Built for the **ASU ICLAD 2025 Hackathon** (EEE 598 — Project 2).
 | **Python 3.10** | Agent runtime |
 | **Docker** | Required by ORFS for physical synthesis |
 | **Icarus Verilog** (`iverilog`) | Functional verification of generated RTL |
-| **[OpenROAD-flow-scripts](https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts)** | Physical synthesis flow -- cloned as sibling directory `../OpenROAD-flow-scripts/` and built via its Docker setup (see [BuildWithDocker.md](https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts/blob/master/docs/user/BuildWithDocker.md)) |
+| **Codex CLI** (`codex`) | LLM backend used by the agent |
+| **[OpenROAD-flow-scripts](https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts)** | Physical synthesis flow -- included as the `OpenROAD-flow-scripts/` git submodule and built via its Docker setup (see [BuildWithDocker.md](https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts/blob/master/docs/user/BuildWithDocker.md)) |
 
 
 ### Install system dependencies
@@ -45,10 +46,12 @@ sudo systemctl start docker
 ## Quick Start
 
 ```bash
-# 1. Clone this repo and OpenROAD-flow-scripts side by side
-git clone https://github.com/hahacharlie/Spec2Tapeout-ICLAD25.git
-git clone --recursive https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts.git
+# 1. Clone this repo and initialize the OpenROAD-flow-scripts submodule
+git clone --recurse-submodules https://github.com/hahacharlie/Spec2Tapeout-ICLAD25.git
 cd Spec2Tapeout-ICLAD25
+
+# If you already cloned without submodules:
+git submodule update --init --recursive
 
 # 2. Create and activate a Python 3.10 virtual environment
 python3.10 -m venv .venv
@@ -57,17 +60,23 @@ source .venv/bin/activate
 # 3. Install Python dependencies
 pip install -r requirements.txt
 
-# 4. Set your API key
-export OPENAI_API_KEY="sk-..."
+# 4. Install and authenticate Codex CLI
+#    Example install:
+#    npm install -g @openai/codex
+codex login
 
-# 5. Set up ORFS Docker (follow OpenROAD-flow-scripts instructions)
-#    See: ../OpenROAD-flow-scripts/docs/user/BuildWithDocker.md
-cd ../OpenROAD-flow-scripts
+# 5. Optional: choose the Codex model
+export CODEX_MODEL="gpt-5.4"
+
+# 6. Set up ORFS Docker (follow OpenROAD-flow-scripts instructions)
+#    See: OpenROAD-flow-scripts/docs/user/BuildWithDocker.md
+cd OpenROAD-flow-scripts
 sudo ./setup.sh
 ./build_openroad.sh
-cd ../Spec2Tapeout-ICLAD25
+cd ..
 
-# 6. Run
+# 7. Run
+#    run.sh checks that Codex CLI is installed and already authenticated
 ./run.sh
 ```
 
@@ -82,7 +91,7 @@ cd ../Spec2Tapeout-ICLAD25
 ### Hidden test cases
 
 ```bash
-./run.sh --problems problems/hidden/*.yaml --output solutions/hidden/
+./run.sh --suite hidden --problems problems/hidden/*.yaml --output solutions/hidden/
 ```
 
 ### Single problem
@@ -90,6 +99,30 @@ cd ../Spec2Tapeout-ICLAD25
 ```bash
 ./run.sh --problems problems/visible/p1.yaml --output solutions/visible/
 ```
+
+### Single problem with JSON report
+
+```bash
+./run.sh --problems problems/visible/p8.yaml --output solutions/out \
+  --report-json solutions/out/report.json
+```
+
+### Help
+
+```bash
+./run.sh --help
+```
+
+`run.sh` performs a small preflight before starting the pipeline:
+
+- verifies `codex` is installed
+- verifies `codex login` has already been completed
+- parses flags like `--problems`, `--suite`, `--output`, `--report-json`, `--workspace`, and `--flow-root`
+- interprets relative paths from the repository root
+- prints the selected Codex model
+
+A single invocation may target only one suite. Mixing `problems/visible/...` and `problems/hidden/...`
+in the same run is rejected, and the pipeline never falls back from hidden collateral to visible collateral.
 
 The script is a thin wrapper around the agent entry point:
 
@@ -125,7 +158,7 @@ YAML Spec
    +-> Spec Interpreter --> parse ports, clock, design type
    |
    +-> RTL Generator --> 3 strategies (textbook, timing_opt, area_opt)
-   |       |                via LLM (GPT-5.3-codex / GPT-5.4)
+   |       |                via Codex CLI (default model: gpt-5.4)
    |       v
    +-> Verification --> iverilog compile + testbench simulation
    |       |              up to 3 fix-and-retry cycles per candidate
@@ -176,7 +209,7 @@ cd evaluation
 python evaluate_openroad.py \
   --odb ../solutions/visible/p1/6_final.odb \
   --sdc ../solutions/visible/p1/6_final.sdc \
-  --flow_root ../../OpenROAD-flow-scripts \
+  --flow_root ../OpenROAD-flow-scripts \
   --problem 1
 ```
 
@@ -190,7 +223,7 @@ python evaluate_openroad.py \
 ├── solutions/
 │   ├── spec2tapeout_agent.py       # Main pipeline orchestrator
 │   ├── agents/
-│   │   ├── llm_client.py           # LLM API abstraction (OpenAI)
+│   │   ├── llm_client.py           # Codex CLI abstraction
 │   │   ├── spec_interpreter.py     # YAML spec parser
 │   │   ├── prompts.py              # System/user prompts for RTL generation
 │   │   ├── rtl_generator.py        # Multi-strategy RTL generation
@@ -213,7 +246,19 @@ python evaluate_openroad.py \
 
 ## Configuration
 
-The LLM backend is configured in `solutions/agents/llm_client.py`. To switch models or providers, edit the `MODEL_MAP` and `get_client()` function. The agent supports any OpenAI-compatible API.
+The LLM backend is configured in `solutions/agents/llm_client.py` and now uses Codex CLI directly instead of the Python OpenAI client. By default the agent calls `codex exec` with model `gpt-5.4`. You can override this with:
+
+```bash
+export CODEX_MODEL="gpt-5.4"
+export CODEX_CLI_PATH="codex"
+export CODEX_SANDBOX="read-only"
+```
+
+If Codex is not authenticated yet, run:
+
+```bash
+codex login
+```
 
 ## Runtime
 

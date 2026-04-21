@@ -43,6 +43,13 @@ class Candidate:
     compile_log: str = ""
     sim_log: str = ""
     retry_count: int = 0
+    base_strategy: str | None = None
+    variant: str | None = None
+    origin: str = "unknown"
+    source_strategy: str | None = None
+    llm_purpose: str | None = None
+    generator: str = "llm"
+    verification_attempts: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -54,3 +61,9 @@ class ScoredCandidate:
     odb_path: Path | None = None
     sdc_path: Path | None = None
     v_path: Path | None = None
+    base_strategy: str | None = None
+    variant: str | None = None
+    origin: str = "unknown"
+    source_strategy: str | None = None
+    llm_purpose: str | None = None
+    generator: str = "llm"

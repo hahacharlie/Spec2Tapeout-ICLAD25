@@ -21,11 +21,18 @@ async def fix_rtl(
         testbench_source=testbench_source,
         error_type=error_type,
     )
-    response = await llm_call(prompt, system, model="sonnet")
+    response = await llm_call(prompt, system, model="sonnet", purpose="rtl_fix")
     fixed_source = extract_code_block(response)
 
     return Candidate(
         rtl_source=fixed_source,
         strategy=candidate.strategy,
         retry_count=candidate.retry_count + 1,
+        base_strategy=candidate.base_strategy,
+        variant=candidate.variant,
+        origin=candidate.origin,
+        source_strategy=candidate.source_strategy,
+        llm_purpose="rtl_fix",
+        generator="llm_fix",
+        verification_attempts=list(candidate.verification_attempts),
     )

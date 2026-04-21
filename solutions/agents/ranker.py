@@ -4,7 +4,8 @@ from pathlib import Path
 
 from .models import Spec, ScoredCandidate
 from .llm_client import llm_call, extract_code_block
-from .prompts import build_optimizer_prompt
+from .prompts import build_optimizer_prompt, build_timing_closure_prompt
+from .suite_utils import normalize_suite
 
 SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent / "evaluation"
 
@@ -105,11 +106,19 @@ def _load_orfs_metrics(report_path: Path) -> dict | None:
         return None
 
 
+def reference_metrics_path(problem_number: int, suite: str) -> Path:
+    normalized_suite = normalize_suite(suite)
+    return SCRIPT_DIR / normalized_suite / f"p{problem_number}" / f"p{problem_number}.json"
+
+
 def score_candidate(
     candidate: ScoredCandidate,
     problem_number: int,
     flow_root: Path,
+    suite: str,
 ) -> float:
+    del flow_root  # Metrics are read directly from ORFS reports.
+
     if candidate.odb_path is None:
         return 0.0
 
@@ -122,6 +131,7 @@ def score_candidate(
     submission = _load_orfs_metrics(report_path)
     if submission is None:
         return 0.0
+    candidate.metrics = submission
 
     # Check required keys exist
     required = ["timing__setup__ws", "timing__setup__tns", "power__total", "design__instance__area"]
@@ -131,11 +141,9 @@ def score_candidate(
         return 0.0
 
     try:
-        ref_path = SCRIPT_DIR / "visible" / f"p{problem_number}" / f"p{problem_number}.json"
+        ref_path = reference_metrics_path(problem_number, suite)
         if not ref_path.exists():
-            ref_path = SCRIPT_DIR / "hidden" / f"p{problem_number}" / f"p{problem_number}.json"
-        if not ref_path.exists():
-            print(f"  No reference metrics for p{problem_number}")
+            print(f"  No {normalize_suite(suite)} reference metrics for p{problem_number}")
             return 0.0
 
         with open(ref_path) as f:
@@ -143,7 +151,6 @@ def score_candidate(
 
         score = _evaluate(submission, reference)
         candidate.score = score
-        candidate.metrics = submission
         return score
 
     except Exception as e:
@@ -155,15 +162,102 @@ def rank_candidates(candidates: list[ScoredCandidate]) -> list[ScoredCandidate]:
     return sorted(candidates, key=lambda c: c.score, reverse=True)
 
 
+
+def _metric_as_float(value, default: float = float("-inf")) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+
+def timing_values(candidate: ScoredCandidate) -> tuple[float, float]:
+    metrics = candidate.metrics or {}
+    return (
+        _metric_as_float(metrics.get("timing__setup__ws")),
+        _metric_as_float(metrics.get("timing__setup__tns")),
+    )
+
+
+
+def timing_is_closed(
+    candidate: ScoredCandidate,
+    wns_target: float = 0.0,
+    tns_target: float = 0.0,
+) -> bool:
+    wns, tns = timing_values(candidate)
+    if wns == float("-inf") or tns == float("-inf"):
+        return False
+    return wns >= wns_target and tns >= tns_target
+
+
+
+def timing_violation_penalty(candidate: ScoredCandidate) -> float:
+    wns, tns = timing_values(candidate)
+    if wns == float("-inf") or tns == float("-inf"):
+        return float("inf")
+    return max(0.0, -wns) * 1000.0 + max(0.0, -tns)
+
+
+
+def timing_sort_key(candidate: ScoredCandidate) -> tuple[float, float, float, float, float]:
+    wns, tns = timing_values(candidate)
+    closed = 1.0 if timing_is_closed(candidate) else 0.0
+    penalty = timing_violation_penalty(candidate)
+    return (closed, -penalty, wns, tns, candidate.score)
+
+
+
+def rank_candidates_by_timing(candidates: list[ScoredCandidate]) -> list[ScoredCandidate]:
+    return sorted(candidates, key=timing_sort_key, reverse=True)
+
+
+
+def best_timing_candidate(candidates: list[ScoredCandidate]) -> ScoredCandidate:
+    if not candidates:
+        raise ValueError("No candidates provided")
+    return max(candidates, key=timing_sort_key)
+
+
+
+def is_timing_better(candidate: ScoredCandidate, baseline: ScoredCandidate) -> bool:
+    return timing_sort_key(candidate) > timing_sort_key(baseline)
+
+
 async def optimize_candidate(
     candidate: ScoredCandidate,
     spec: Spec,
+    goal: str = "score",
+    attempt: int = 1,
+    timing_report: str | None = None,
+    timing_only: bool = False,
+    testbench_source: str | None = None,
+    variant: str | None = None,
+    prior_attempt_summary: str | None = None,
 ) -> str:
-    system, prompt = build_optimizer_prompt(
-        rtl_source=candidate.rtl_source,
-        metrics=candidate.metrics,
-        score=candidate.score,
-        spec=spec,
+    if goal == "timing":
+        system, prompt = build_timing_closure_prompt(
+            rtl_source=candidate.rtl_source,
+            metrics=candidate.metrics,
+            spec=spec,
+            attempt=attempt,
+            timing_report=timing_report,
+            timing_only=timing_only,
+            testbench_source=testbench_source,
+            variant=variant,
+            prior_attempt_summary=prior_attempt_summary,
+        )
+    else:
+        system, prompt = build_optimizer_prompt(
+            rtl_source=candidate.rtl_source,
+            metrics=candidate.metrics,
+            score=candidate.score,
+            spec=spec,
+        )
+    response = await llm_call(
+        prompt,
+        system,
+        model="opus",
+        purpose="timing_optimization" if goal == "timing" else "score_optimization",
     )
-    response = await llm_call(prompt, system, model="opus")
     return extract_code_block(response)

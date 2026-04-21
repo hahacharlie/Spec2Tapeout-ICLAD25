@@ -2,8 +2,6 @@
 
 Consists of scripts, testbenches and comparisons metrics to evaluate generated solutions. 
 
-
-
 For each problem you must run two evaluations scripts
 
 ### 1. Functional evaluation of Verilog
@@ -19,6 +17,5 @@ python3 evaluate_verilog.py --verilog ../example_problem/output/iclad_seq_detect
 This will check the metrics of your generated layouts using the specification jsons provided. An example command is provided below
 
 ```
-python3 evaluate_openroad.py --odb ../solutions/visible/p1/6_final.odb --sdc ../solutions/visible/p1/6_final.sdc --flow_root ../../OpenROAD-flow-scripts --problem 1
+python3 evaluate_openroad.py --odb ../solutions/visible/p1/6_final.odb --sdc ../solutions/visible/p1/6_final.sdc --flow_root ../OpenROAD-flow-scripts --problem 1
 ```
-

@@ -1,4 +1,5 @@
 from __future__ import annotations
+import re
 
 from .models import Spec
 
@@ -72,3 +73,46 @@ export CORE_MARGIN = 4
 
 export PLACE_DENSITY = {dens}
 """
+
+
+
+def tighten_physical_config(
+    config_content: str,
+    attempt: int = 1,
+    util_step: int = 5,
+    density_step: float = 0.05,
+    min_utilization: int = 10,
+    min_density: float = 0.45,
+) -> str:
+    """Make the ORFS floorplan more timing-friendly for timing-repair attempts.
+
+    We do this by lowering utilization and placement density so the placer/router
+    has more whitespace to work with. The function is idempotent across attempts:
+    later attempts progressively tighten the physical settings.
+    """
+    attempt = max(1, attempt)
+
+    def _replace_util(match: re.Match[str]) -> str:
+        current = int(match.group(2))
+        updated = max(min_utilization, current - util_step * attempt)
+        return f"{match.group(1)}{updated}"
+
+    def _replace_density(match: re.Match[str]) -> str:
+        current = float(match.group(2))
+        updated = max(min_density, current - density_step * attempt)
+        density_str = f"{updated:.2f}".rstrip("0").rstrip(".")
+        return f"{match.group(1)}{density_str}"
+
+    config_content = re.sub(
+        r"(^export CORE_UTILIZATION = )(\d+)$",
+        _replace_util,
+        config_content,
+        flags=re.MULTILINE,
+    )
+    config_content = re.sub(
+        r"(^export PLACE_DENSITY = )(\d+(?:\.\d+)?)$",
+        _replace_density,
+        config_content,
+        flags=re.MULTILINE,
+    )
+    return config_content

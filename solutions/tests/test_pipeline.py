@@ -1,13 +1,15 @@
 """End-to-end integration test using problem P1.
 
 Requires:
-- ANTHROPIC_API_KEY environment variable set
-- Docker with openroad/flow-ubuntu22.04-builder:836842 image
+- Codex CLI installed and authenticated (`codex login`)
 - iverilog installed
 
-Run: python -m pytest tests/test_pipeline.py -v -s --timeout=7200
+Run: pytest -q solutions/tests/test_pipeline.py -v -s --timeout=7200
 """
 import asyncio
+import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -22,7 +24,36 @@ EVAL_DIR = BASE_DIR / "evaluation" / "visible"
 from agents.spec_interpreter import parse_spec
 from agents.sdc_config_generator import generate_sdc, generate_config_mk
 from agents.rtl_generator import generate_rtl
-from agents.verification import verify_candidate
+from spec2tapeout_agent import verify_and_fix
+
+
+def _running_in_codex_sandbox() -> bool:
+    return (
+        os.getenv("CODEX_CI") == "1"
+        or os.getenv("CODEX_SANDBOX_NETWORK_DISABLED") == "1"
+        or os.getenv("CODEX_THREAD_ID") is not None
+    )
+
+
+def _codex_live_test_ready() -> bool:
+    if _running_in_codex_sandbox():
+        return False
+    return _codex_authenticated()
+
+
+def _codex_authenticated() -> bool:
+    if shutil.which("codex") is None:
+        return False
+    try:
+        result = subprocess.run(
+            ["codex", "login", "status"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        return result.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 @pytest.mark.skipif(
@@ -48,11 +79,12 @@ class TestP1Pipeline:
         assert "seq_detector_0011" in config
 
     @pytest.mark.skipif(
-        "ANTHROPIC_API_KEY" not in __import__("os").environ,
-        reason="ANTHROPIC_API_KEY not set",
+        not _codex_live_test_ready(),
+        reason="Codex CLI integration test disabled in Codex sandbox or Codex CLI not authenticated",
     )
+    @pytest.mark.skipif(shutil.which("iverilog") is None, reason="iverilog not installed")
     def test_generate_and_verify_rtl(self, tmp_path):
-        """Generate RTL with textbook strategy and verify with iVerilog."""
+        """Exercise the live generate-and-fix loop used by the real pipeline."""
         spec = parse_spec(PROBLEMS_DIR / "p1.yaml")
         tb_path = EVAL_DIR / "p1" / "iclad_seq_detector_tb.v"
 
@@ -61,10 +93,13 @@ class TestP1Pipeline:
             assert "module seq_detector_0011" in candidate.rtl_source
             assert "endmodule" in candidate.rtl_source
 
-            passed, compile_log, sim_log = await verify_candidate(
-                candidate.rtl_source, tb_path, tmp_path,
+            verified = await verify_and_fix(
+                candidate,
+                spec,
+                tb_path,
+                tmp_path / "textbook",
             )
-            return passed, compile_log, sim_log
+            return verified.passed, verified.compile_log, verified.sim_log
 
         passed, compile_log, sim_log = asyncio.run(run())
         print(f"Compile log: {compile_log}")
